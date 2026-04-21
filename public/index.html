@@ -4,6 +4,9 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>FormToDoc — Clean Form Extraction</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+    <link rel="shortcut icon" href="/favicon.svg">
+    <script src="/config.js"></script>
     <style>
         :root {
             --bg: #fdfcfb;
@@ -224,16 +227,20 @@
 <body>
     <div class="container">
         <header>
-            <h1>FormToDoc</h1>
+            <div style="display: flex; align-items: center; gap: 1rem; margin-bottom: 0.5rem;">
+                <div style="width: 40px; height: 40px; background: white; border: 2px solid black; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 0.8rem; letter-spacing: -0.5px;">FTD</div>
+                <h1 style="margin: 0;">FormToDoc</h1>
+            </div>
             <p class="subtitle">Transform messy form fragments into clean documents.</p>
         </header>
 
         <div class="nav-tabs">
             <div class="tab active" onclick="switchTab('paste-panel', this)">Paste Selection</div>
-            <div class="tab" onclick="switchTab('url-panel', this)">Scrape URL</div>
+            <div class="tab" onclick="switchTab('url-panel', this)">Add Form URL</div>
         </div>
 
         <div id="paste-panel" class="panel active">
+            <input type="url" id="paste-url-input" placeholder="Optional form URL to place at the top of the doc">
             <textarea id="paste-input" placeholder="Copy form selection (Cmd+A) and paste here..."></textarea>
             <div class="btn-group">
                 <button class="btn-primary" id="extract-btn" onclick="extractPasted()">Extract Questions</button>
@@ -244,7 +251,7 @@
         <div id="url-panel" class="panel">
             <input type="url" id="url-input" placeholder="https://application-site.com/apply">
             <div class="btn-group">
-                <button class="btn-primary" id="scrape-btn" onclick="scrapeUrl()">Extract from URL</button>
+                <button class="btn-primary" id="scrape-btn" onclick="scrapeUrl()">Create Doc with URL</button>
                 <button class="btn-secondary" onclick="clearAll()">Clear</button>
             </div>
         </div>
@@ -271,10 +278,58 @@
 
     <script>
         let questions = [];
+        let latestTemplate = '';
+        let sourceUrl = '';
+        let analyticsReady = false;
+
+        function trackEvent(eventName, params = {}) {
+            if (window.gtag) {
+                window.gtag('event', eventName, params);
+            }
+
+            if (window.clarity) {
+                window.clarity('event', eventName);
+            }
+        }
+
+        function initAnalytics() {
+            if (analyticsReady) return;
+            analyticsReady = true;
+
+            const config = window.__APP_CONFIG__ || {};
+
+            if (config.gaMeasurementId) {
+                const gaScript = document.createElement('script');
+                gaScript.async = true;
+                gaScript.src = `https://www.googletagmanager.com/gtag/js?id=${encodeURIComponent(config.gaMeasurementId)}`;
+                document.head.appendChild(gaScript);
+
+                window.dataLayer = window.dataLayer || [];
+                window.gtag = function gtag() { window.dataLayer.push(arguments); };
+                window.gtag('js', new Date());
+                window.gtag('config', config.gaMeasurementId);
+            }
+
+            if (config.clarityProjectId) {
+                (function(c, l, a, r, i, t, y) {
+                    c[a] = c[a] || function() { (c[a].q = c[a].q || []).push(arguments); };
+                    t = l.createElement(r);
+                    t.async = 1;
+                    t.src = `https://www.clarity.ms/tag/${i}`;
+                    y = l.getElementsByTagName(r)[0];
+                    y.parentNode.insertBefore(t, y);
+                })(window, document, 'clarity', 'script', config.clarityProjectId);
+            }
+        }
+
+        initAnalytics();
 
         function clearAll() {
             questions = [];
+            latestTemplate = '';
+            sourceUrl = '';
             document.getElementById('url-input').value = '';
+            document.getElementById('paste-url-input').value = '';
             document.getElementById('paste-input').value = '';
             document.getElementById('results').classList.add('hidden');
             document.getElementById('export-bar').classList.add('hidden');
@@ -292,12 +347,25 @@
         function renderQuestions() {
             const list = document.getElementById('questions-list');
             list.innerHTML = '';
+            latestTemplate = buildPlainTextTemplate();
             
-            if (questions.length === 0) {
+            if (questions.length === 0 && !sourceUrl) {
                 list.innerHTML = '<div style="padding: 3rem; text-align: center; color: var(--text-secondary); font-size: 0.9rem;">No questions found. Try a broader selection.</div>';
                 document.getElementById('export-bar').classList.add('hidden');
             } else {
                 document.getElementById('export-bar').classList.remove('hidden');
+            }
+
+            if (sourceUrl) {
+                const item = document.createElement('div');
+                item.className = 'question-item';
+
+                const text = document.createElement('div');
+                text.className = 'question-text';
+                text.innerHTML = `<strong>Form URL:</strong> <a href="${escapeAttribute(sourceUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(sourceUrl)}</a>`;
+
+                item.appendChild(text);
+                list.appendChild(item);
             }
 
             questions.forEach((q, index) => {
@@ -323,37 +391,25 @@
                 list.appendChild(item);
             });
             
-            document.getElementById('count-tag').innerText = `${questions.length} questions detected`;
+            const extraLabel = sourceUrl ? ' + form link' : '';
+            document.getElementById('count-tag').innerText = `${questions.length} questions detected${extraLabel}`;
             document.getElementById('results').classList.remove('hidden');
         }
 
         async function scrapeUrl() {
             const url = document.getElementById('url-input').value;
             if (!url) return;
-
-            const loading = document.getElementById('loading');
-            loading.style.display = 'block';
-            document.getElementById('results').classList.add('hidden');
-
-            try {
-                const response = await fetch('/api/scrape', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ url })
-                });
-                const data = await response.json();
-                questions = data.questions;
-                renderQuestions();
-            } catch (error) {
-                alert('Connection failed.');
-            } finally {
-                loading.style.display = 'none';
-            }
+            sourceUrl = url.trim();
+            questions = [];
+            latestTemplate = buildPlainTextTemplate();
+            renderQuestions();
+            trackEvent('create_doc_with_url', { has_url: true });
         }
 
         async function extractPasted() {
             const text = document.getElementById('paste-input').value;
             if (!text) return;
+            sourceUrl = document.getElementById('paste-url-input').value.trim();
 
             const loading = document.getElementById('loading');
             loading.style.display = 'block';
@@ -366,8 +422,13 @@
                     body: JSON.stringify({ text })
                 });
                 const data = await response.json();
-                questions = data.questions;
+                questions = Array.isArray(data.questions) ? data.questions : [];
+                latestTemplate = data.template || buildPlainTextTemplate();
                 renderQuestions();
+                trackEvent('extract_questions', {
+                    has_url: Boolean(sourceUrl),
+                    question_count: questions.length,
+                });
             } catch (error) {
                 alert('AI processing failed.');
             } finally {
@@ -377,6 +438,9 @@
 
         function generateHtmlContent() {
             let html = '<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; color: #1a1a1a;">';
+            if (sourceUrl) {
+                html += `<p style="margin-bottom: 20pt; font-size: 11pt;"><strong>Form URL:</strong> <a href="${escapeAttribute(sourceUrl)}">${escapeHtml(sourceUrl)}</a></p>`;
+            }
             questions.forEach(q => {
                 html += `<h2 style="font-size: 14pt; margin-top: 24pt; margin-bottom: 6pt;"><strong>${escapeHtml(q)}</strong></h2>`;
                 html += `<p style="color: #666666; margin-bottom: 24pt;">[Your answer here]</p>`; 
@@ -385,8 +449,21 @@
             return html;
         }
 
+        function buildPlainTextTemplate() {
+            const sections = [];
+            if (sourceUrl) {
+                sections.push(`Form URL\n${sourceUrl}`);
+            }
+            questions.forEach(q => sections.push(`${q}\n[Your answer here]`));
+            return sections.join('\n\n');
+        }
+
         function escapeHtml(unsafe) {
             return unsafe.replace(/[&<"']/g, m => ({'&':'&amp;','<':'&lt;','"':'&quot;',"'":"&#039;"}[m]));
+        }
+
+        function escapeAttribute(unsafe) {
+            return unsafe.replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":"&#039;"}[m]));
         }
 
         function copyForDocs() {
@@ -395,11 +472,15 @@
             container.innerHTML = html;
 
             const blobHtml = new Blob([html], { type: 'text/html' });
-            const blobText = new Blob([questions.join('\n\n')], { type: 'text/plain' });
+            const blobText = new Blob([latestTemplate || buildPlainTextTemplate()], { type: 'text/plain' });
             
             const data = [new ClipboardItem({ 'text/html': blobHtml, 'text/plain': blobText })];
             
             navigator.clipboard.write(data).then(() => {
+                trackEvent('copy_for_google_docs', {
+                    has_url: Boolean(sourceUrl),
+                    question_count: questions.length,
+                });
                 const btn = document.querySelector('.export-btn');
                 const original = btn.innerText;
                 btn.innerText = 'Copied!';
@@ -418,7 +499,10 @@
 
         function downloadMarkdown() {
             let md = '';
-            questions.forEach(q => md += `### ${q}\n\n\n\n---\n\n`);
+            if (sourceUrl) {
+                md += `### Form URL\n\n${sourceUrl}\n\n---\n\n`;
+            }
+            questions.forEach(q => md += `### ${q}\n\n[Your answer here]\n\n---\n\n`);
             downloadFile(md, 'text/markdown', 'form_template.md');
         }
 

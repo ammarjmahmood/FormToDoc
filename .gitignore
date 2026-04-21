@@ -1,1 +1,6 @@
-node_modules/\n.env\n.DS_Store\n*.png\ndebug_yc.js
+node_modules/
+.env
+.DS_Store
+*.png
+debug_yc.js
+.vercel/
